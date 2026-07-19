@@ -7,6 +7,8 @@ machines to maintain, and **zero compute cost when nobody is playing**.
 
 **Live demo:** https://browserquest.carluve.workers.dev
 
+![BrowserQuest running natively on Cloudflare](docs/images/juego-02-en-juego.png)
+
 ---
 
 ## Where this project comes from
@@ -90,71 +92,37 @@ For the full technical breakdown of the port, see **[`worker/SETUP.md`](worker/S
 
 ## Architecture
 
-The original architecture and the Cloudflare port, side by side:
+From an always-on Node.js server to Cloudflare's edge — the same game, no
+process to keep alive:
 
-```
-        ORIGINAL (Mozilla, 2012)                 CLOUDFLARE PORT (this repo)
+![From Node.js server to the Cloudflare edge](docs/images/diagrama-comparativa.png)
 
-  ┌───────────────┐                        ┌───────────────┐
-  │   Browser     │                        │   Browser     │
-  │ canvas client │                        │ canvas client │
-  └──────┬────────┘                        └──────┬────────┘
-         │ WebSocket                              │ HTTP + WebSocket
-         ▼                                        ▼
-  ┌───────────────────────┐              ┌────────────────────────────┐
-  │  Node.js server        │              │  Worker  (src/index.ts)     │
-  │  · websocket-server     │              │  · ASSETS binding (client)  │
-  │  · setInterval loop     │              │  · routes /ws, /status      │
-  │  · world state in RAM   │              └──────────────┬─────────────┘
-  │  · no persistence       │                             │ fetch() / RPC
-  └───────────────────────┘                             ▼
-      (always-on process)                 ┌────────────────────────────┐
-                                          │  WorldDO (Durable Object)    │
-                                          │  · hibernatable WebSockets   │
-                                          │  · Alarms API = game loop    │
-                                          │  · SQLite = persistence      │
-                                          │  · game/ (original JS logic) │
-                                          └────────────────────────────┘
-                                              (hibernates when empty)
-```
+The port in detail — one world modelled as a single Durable Object, with the
+entry Worker serving the client and routing WebSocket/RPC traffic:
+
+![Cloudflare port architecture](docs/images/diagrama-arquitectura.png)
 
 ### Request flow (the port)
 
 The entry Worker is a single router; everything stateful lives in one Durable
 Object named `world1`:
 
-```
-Browser
-  │
-  ├─ GET /            ─────────────▶ Worker ─▶ ASSETS ─▶ HTML/JS/sprites/audio
-  │
-  ├─ WS  /ws          ─────────────▶ Worker ─▶ WORLD.idFromName("world1")
-  │                                              └─▶ WorldDO.fetch()  (WebSocketPair,
-  │                                                   acceptWebSocket, handshake "go")
-  │        ◀── real-time game frames (JSON) ──────────┘
-  │
-  └─ GET /status      ─────────────▶ Worker ─▶ WorldDO.getStatus()  (RPC)
-                                                 └─▶ { world, connections,
-                                                       players, entities }
-```
+![Request flow through the entry Worker and the WorldDO](docs/images/diagrama-flujo-peticiones.png)
 
 ### Game loop (Alarms, not setInterval)
 
-```
-  player connects ─▶ ensureAlarm() ─▶ setAlarm(now + 50ms)
-                                            │
-                                            ▼
-                        ┌───────────────────────────────────────┐
-                        │  alarm():                              │
-                        │    world.tick()      (20 ticks/sec)    │
-                        │    every ~5s -> snapshot players (SQL) │
-                        │    connections > 0 ? reschedule +50ms  │
-                        └───────────────────┬───────────────────┘
-                                            │ no connections left
-                                            ▼
-                                   stop scheduling ─▶ Durable Object HIBERNATES
-                                                      (zero compute cost)
-```
+Each alarm runs one tick and schedules the next — but only while players remain.
+When the world empties, it stops scheduling and hibernates:
+
+![Game loop driven by the Alarms API](docs/images/diagrama-game-loop.png)
+
+---
+
+## Screenshots
+
+| Character creation | In the world | Exploring |
+|---|---|---|
+| ![Character creation screen](docs/images/juego-01-inicio.png) | ![Playing in the world](docs/images/juego-02-en-juego.png) | ![Exploring the map](docs/images/juego-03-mundo.png) |
 
 ---
 

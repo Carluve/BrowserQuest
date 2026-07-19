@@ -6,3 +6,9 @@ config_local*
 client/audio/music
 .DS_Store
 *.swp
+
+# Personal blog write-up (not part of the migration)
+blog/
+
+# Internal development notes
+CLAUDE.md
